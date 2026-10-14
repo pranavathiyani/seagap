@@ -1,0 +1,8 @@
+marinenp_v1_r20250608_csv/
+*.zip
+data/interim/*
+!data/interim/.gitkeep
+
+__pycache__/
+*.pyc
+.ipynb_checkpoints/

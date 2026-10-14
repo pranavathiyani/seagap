@@ -1,0 +1,24 @@
+# Reproducible environment for SEAGAP.
+#
+#   conda env create -f environment.yml
+#   conda activate seagap
+#
+# If the conda solver misbehaves, use the minimal path in README.md instead:
+# create a bare python=3.12 env and pip install the same packages.
+
+name: seagap
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pandas>=2.2
+  - numpy>=1.26
+  - pyarrow>=16
+  - scipy>=1.13
+  - scikit-learn>=1.4
+  - matplotlib>=3.8
+  - requests>=2.31
+  - rdkit>=2024.03
+  - python-igraph>=0.11
+  - leidenalg>=0.10
+  - jupyterlab>=4.2
