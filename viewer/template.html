@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SEAGAP</title>
+<style>
+:root {
+  color-scheme: light;
+  --page:           #f9f9f7;
+  --surface:        #fcfcfb;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --muted:          #898781;
+  --grid:           #e1e0d9;
+  --axis:           #c3c2b7;
+  --series-1:       #2a78d6;
+  --border:         rgba(11,11,11,0.10);
+  --series-2:       #eb6834;
+  --cloud:          rgba(137,135,129,0.42);
+}
+/* Encoding note. The charts use emphasis, not a categorical palette: one hue
+   (--series-1) marks the flagged subset and everything else recedes to a neutral
+   (--cloud). Running the palette validator on the pair reports a chroma-floor
+   FAIL on the gray, which is the expected result for a neutral - it is a
+   background, not a second series. Everything that does apply passes in both
+   modes: CVD separation dE 15.9 protan / 11.2 tritan, normal-vision 17.8, and
+   both colours clear 3:1 against their surface. Identity never rests on colour
+   alone: the legend names both classes and every chart has a table beneath it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface:        #1a1a19;
+    --text-primary:   #f0efec;
+    --text-secondary: #c3c2b7;
+    --muted:          #898781;
+    --grid:           #2c2c2a;
+    --axis:           #383835;
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --border:         rgba(255,255,255,0.10);
+    --cloud:          rgba(137,135,129,0.50);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page:           #0d0d0d;
+  --surface:        #1a1a19;
+  --text-primary:   #f0efec;
+  --text-secondary: #c3c2b7;
+  --muted:          #898781;
+  --grid:           #2c2c2a;
+  --axis:           #383835;
+  --series-1:       #3987e5;
+  --series-2:       #d95926;
+  --border:         rgba(255,255,255,0.10);
+  --cloud:          rgba(137,135,129,0.50);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--page); color: var(--text-primary);
+  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 1120px; margin: 0 auto; padding: 32px 16px 72px; }
+header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+         margin-bottom: 6px; }
+h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; }
+.sub { color: var(--text-secondary); font-size: 15px; margin: 0 0 28px; max-width: 70ch; }
+h2 { font-size: 17px; margin: 40px 0 6px; letter-spacing: -0.005em; }
+.note { color: var(--text-secondary); font-size: 13.5px; margin: 0 0 14px; max-width: 76ch; }
+.card { background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; padding: 18px; }
+
+#themeBtn { margin-left: auto; background: var(--surface); color: var(--text-secondary);
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 11px;
+  font: inherit; font-size: 13px; cursor: pointer; }
+#themeBtn:hover { color: var(--text-primary); }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(152px, 1fr));
+         gap: 10px; margin-bottom: 8px; }
+.tile { background: var(--surface); border: 1px solid var(--border);
+        border-radius: 10px; padding: 14px 16px; }
+.tile .v { font-size: 25px; line-height: 1.1; letter-spacing: -0.02em; }
+.tile .k { color: var(--text-secondary); font-size: 12.5px; margin-top: 5px; }
+
+.legend { display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+          margin: 2px 0 10px; font-size: 13px; color: var(--text-secondary); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+          margin-right: 6px; vertical-align: -1px; }
+
+.chartbox { position: relative; }
+canvas { display: block; width: 100%; touch-action: pan-y; }
+.tip { position: absolute; pointer-events: none; opacity: 0; transition: opacity .09s;
+  background: var(--surface); color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 10px; font-size: 12.5px; line-height: 1.45;
+  box-shadow: 0 3px 14px rgba(0,0,0,.14); white-space: nowrap; z-index: 5; }
+.tip b { font-weight: 600; }
+.tip .m { color: var(--text-secondary); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--grid); }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12.5px;
+     cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0;
+     background: var(--surface); }
+th:hover { color: var(--text-primary); }
+th.sorted::after { content: " \25BE"; color: var(--muted); }
+th.sorted.asc::after { content: " \25B4"; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: color-mix(in srgb, var(--muted) 9%, transparent); }
+.scroll { max-height: 440px; overflow: auto; border: 1px solid var(--border);
+          border-radius: 10px; background: var(--surface); }
+.neg { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.sci { font-style: italic; }
+
+.tabs { display: flex; gap: 4px; margin: 0 0 24px; border-bottom: 1px solid var(--border);
+        flex-wrap: wrap; }
+.tabs button { background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-secondary); font: inherit; font-size: 14px; padding: 9px 13px;
+  cursor: pointer; margin-bottom: -1px; }
+.tabs button:hover { color: var(--text-primary); }
+.tabs button[aria-selected="true"] { color: var(--text-primary);
+  border-bottom-color: var(--series-1); font-weight: 600; }
+.panel[hidden] { display: none; }
+
+.controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+            margin: 0 0 12px; font-size: 13.5px; color: var(--text-secondary); }
+.controls select, .controls input[type=range] { font: inherit; font-size: 13.5px; }
+.controls select { background: var(--surface); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 9px; max-width: 320px; }
+.controls label { display: flex; gap: 7px; align-items: center; }
+#netStat { color: var(--text-secondary); font-size: 13px; margin: 8px 0 0; }
+
+footer { margin-top: 52px; padding-top: 18px; border-top: 1px solid var(--border);
+         color: var(--text-secondary); font-size: 13px; }
+code { font-size: 12.5px; background: color-mix(in srgb, var(--muted) 13%, transparent);
+       padding: 1px 5px; border-radius: 4px; }
+@media (max-width: 620px) {
+  .wrap { padding: 22px 16px 56px; }
+  h1 { font-size: 22px; }
+  .tile .v { font-size: 21px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>SEAGAP</h1>
+  <button id="themeBtn" type="button">Theme</button>
+</header>
+<p class="sub">Mapping under-explored chemical space in marine natural products.
+Structural families from the MarineNP release, crossed against WoRMS-resolved
+source taxonomy.</p>
+
+<div class="tiles" id="tiles"></div>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" id="tab-overview" aria-controls="p-overview" aria-selected="true">Overview</button>
+  <button role="tab" id="tab-network"  aria-controls="p-network"  aria-selected="false">Network</button>
+  <button role="tab" id="tab-tables"   aria-controls="p-tables"   aria-selected="false">Tables</button>
+</nav>
+
+<section class="panel" id="p-overview" role="tabpanel" aria-labelledby="tab-overview">
+
+<h2>How chemical breadth scales with sampling effort</h2>
+<p class="note">Each point is a genus. Structural families grow as a power of the
+number of compounds reported, so a genus studied ten times as hard yields far
+fewer than ten times the families. Points well below the fitted curve are
+chemically repetitive relative to the work already done.</p>
+<div class="legend">
+  <span><span class="swatch" style="background:var(--cloud)"></span>genus</span>
+  <span><span class="swatch" style="background:var(--series-1)"></span>saturated (z &lt; &minus;1.96)</span>
+  <span><span class="swatch" style="background:var(--axis);border-radius:1px;height:2px;width:14px"></span>fitted curve</span>
+</div>
+<div class="card chartbox">
+  <canvas id="scatter" height="420"></canvas>
+  <div class="tip" id="tip1"></div>
+</div>
+
+<h2>The deviations are one-sided</h2>
+<p class="note">Standardised deviation from the curve. A genus can be far more
+repetitive than expected, but nothing is far more diverse, because a genus
+produces biosynthetically related metabolites. No taxon reaches the positive
+threshold at either genus or order level.</p>
+<div class="card chartbox">
+  <canvas id="hist" height="250"></canvas>
+  <div class="tip" id="tip2"></div>
+</div>
+
+</section>
+
+<section class="panel" id="p-network" role="tabpanel" aria-labelledby="tab-network" hidden>
+<h2>Which genera produce which chemistry</h2>
+<p class="note">A bipartite network for one taxonomic order at a time. Each genus
+links to every structural family it produces. The whole matrix is 99% empty, so
+the network is only legible one order at a time &mdash; that sparseness is the
+finding, not a display problem.</p>
+<div class="controls">
+  <label>order
+    <select id="netOrder"></select>
+  </label>
+  <label>min family size
+    <input type="range" id="netMin" min="1" max="40" value="1" style="width:120px">
+    <span id="netMinV" style="font-variant-numeric:tabular-nums">1</span>
+  </label>
+</div>
+<div class="legend">
+  <span><span class="swatch" style="background:var(--series-1)"></span>genus</span>
+  <span><span class="swatch" style="background:var(--series-2)"></span>structural family</span>
+  <span><span class="swatch" style="background:var(--series-1);box-shadow:0 0 0 2px var(--text-primary)"></span>saturated genus</span>
+</div>
+<div class="card chartbox">
+  <canvas id="net" height="560"></canvas>
+  <div class="tip" id="tip3"></div>
+</div>
+<p id="netStat"></p>
+<p class="note" style="margin-top:14px">Node area is proportional to compounds for
+a genus and to members for a family. A family touching one genus in this order sits
+at the rim; one shared across many is pulled toward the centre.</p>
+</section>
+
+<section class="panel" id="p-tables" role="tabpanel" aria-labelledby="tab-tables" hidden>
+
+<h2>Saturated genera</h2>
+<p class="note">Below the curve at z &lt; &minus;1.96. Further screening of these
+has poor expected return per compound isolated.</p>
+<div class="scroll"><table id="tSat"></table></div>
+
+<h2>The coverage frontier</h2>
+<p class="note">Orders whose chemistry is broad for the effort spent, counted by
+how many of their genera remain effectively unexamined. This rests on the order
+being productive and the genus being unstudied, not on estimating breadth from a
+handful of compounds.</p>
+<div class="scroll"><table id="tFront"></table></div>
+
+<h2>Provenance: organism records whose identifier resolves elsewhere</h2>
+<p class="note">The release reconciles organism names to WoRMS by fuzzy matching.
+These records carry an AphiaID belonging to a different genus, so every property
+inherited from it &mdash; phylum, habitat flags &mdash; is wrong.</p>
+<div class="scroll"><table id="tProv"></table></div>
+
+</section>
+
+<footer id="foot"></footer>
+</div>
+
+<script id="seagap-data" type="application/json">__DATA__</script>
+<script>
+const DATA = JSON.parse(document.getElementById('seagap-data').textContent);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmt = n => n.toLocaleString('en-US');
+
+/* ---------- theme ---------- */
+const btn = document.getElementById('themeBtn');
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme')
+    || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+}
+btn.addEventListener('click', () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  try { localStorage.setItem('seagap-theme', next); } catch (e) {}
+  drawAll();
+  if (!document.getElementById('p-network').hidden) drawNet();
+});
+try {
+  const saved = localStorage.getItem('seagap-theme');
+  if (saved) document.documentElement.setAttribute('data-theme', saved);
+} catch (e) {}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
+
+/* ---------- tiles ---------- */
+document.getElementById('tiles').innerHTML = DATA.tiles
+  .map(t => `<div class="tile"><div class="v">${t[0]}</div><div class="k">${t[1]}</div></div>`)
+  .join('');
+
+/* ---------- canvas helper ---------- */
+const PAD = { l: 64, r: 16, t: 16, b: 44 };
+function setup(cv) {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const w = cv.clientWidth;
+  // on a phone a 420px-tall plot in a 350px-wide box is a tall thin sliver, so
+  // the height follows the width instead of being fixed
+  const base = +cv.getAttribute('height');
+  const h = w < 560 ? Math.round(Math.max(base * 0.62, w * 0.78)) : base;
+  cv.width = w * dpr; cv.height = h * dpr;
+  cv.style.height = h + 'px';
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  // narrow screens get tighter gutters so the plot keeps its width
+  PAD.l = w < 560 ? 44 : 64;
+  PAD.r = w < 560 ? 10 : 16;
+  return { g, w, h };
+}
+function axisText(g) {
+  g.fillStyle = css('--muted');
+  g.font = '11px system-ui, -apple-system, sans-serif';
+}
+
+/* ---------- scatter ---------- */
+let pts = [];
+
+function drawScatter() {
+  const cv = document.getElementById('scatter');
+  const { g, w, h } = setup(cv);
+  const G = DATA.genera;                       // [name, n, fams, z, phylum, order]
+  const xs = G.map(d => Math.log10(d[1])), ys = G.map(d => Math.log10(d[2]));
+  // fit the ranges to the data, with a small margin, so the plot is not mostly
+  // empty space above and below a diagonal band
+  const mx = (Math.max(...xs) - Math.min(...xs)) * 0.04;
+  const my = (Math.max(...ys) - Math.min(...ys)) * 0.06;
+  const x0 = Math.min(...xs) - mx, x1 = Math.max(...xs) + mx;
+  const y0 = Math.min(...ys) - my, y1 = Math.max(...ys) + my;
+  const X = v => PAD.l + (v - x0) / (x1 - x0) * (w - PAD.l - PAD.r);
+  const Y = v => h - PAD.b - (v - y0) / (y1 - y0) * (h - PAD.t - PAD.b);
+
+  // decade grid, only where it falls inside the fitted range
+  g.strokeStyle = css('--grid'); g.lineWidth = 1;
+  axisText(g);
+  for (let d = Math.ceil(x0); d <= Math.floor(x1); d++) {
+    const px = Math.round(X(d)) + .5;
+    g.beginPath(); g.moveTo(px, PAD.t); g.lineTo(px, h - PAD.b); g.stroke();
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    g.fillText(fmt(Math.pow(10, d)), px, h - PAD.b + 8);
+  }
+  for (let d = Math.ceil(y0); d <= Math.floor(y1); d++) {
+    const py = Math.round(Y(d)) + .5;
+    g.beginPath(); g.moveTo(PAD.l, py); g.lineTo(w - PAD.r, py); g.stroke();
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    g.fillText(fmt(Math.pow(10, d)), PAD.l - 9, py);
+  }
+  g.strokeStyle = css('--axis');
+  g.beginPath(); g.moveTo(PAD.l, h - PAD.b + .5); g.lineTo(w - PAD.r, h - PAD.b + .5);
+  g.moveTo(PAD.l + .5, PAD.t); g.lineTo(PAD.l + .5, h - PAD.b); g.stroke();
+
+  g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  g.fillStyle = css('--text-secondary');
+  g.font = '12px system-ui, -apple-system, sans-serif';
+  g.fillText('compounds reported', (PAD.l + w - PAD.r) / 2, h - 8);
+  g.save(); g.translate(16, (PAD.t + h - PAD.b) / 2); g.rotate(-Math.PI / 2);
+  g.textBaseline = 'top';
+  g.fillText('structural families', 0, 0); g.restore();
+
+  // marks: dense cloud recedes, flagged genera carry the hue
+  pts = [];
+  const cloud = css('--cloud'), hue = css('--series-1'), surf = css('--surface');
+  G.forEach((d, i) => {
+    const px = X(xs[i]), py = Y(ys[i]), sat = d[3] < -1.96;
+    pts.push({ px, py, d, sat });
+    if (!sat) { g.fillStyle = cloud; g.beginPath(); g.arc(px, py, 2.6, 0, 7); g.fill(); }
+  });
+  pts.filter(p => p.sat).forEach(p => {
+    g.fillStyle = hue; g.beginPath(); g.arc(p.px, p.py, 4.2, 0, 7); g.fill();
+    g.strokeStyle = surf; g.lineWidth = 2; g.stroke();   // 2px surface ring
+  });
+
+  // fitted curve, clipped to the plot rect so it cannot run off the corner
+  g.save();
+  g.beginPath();
+  g.rect(PAD.l, PAD.t, w - PAD.l - PAD.r, h - PAD.t - PAD.b);
+  g.clip();
+  g.strokeStyle = css('--axis'); g.lineWidth = 2; g.beginPath();
+  for (let i = 0; i <= 120; i++) {
+    const lx = x0 + (x1 - x0) * i / 120;
+    const ly = Math.log10(DATA.curve.a) + DATA.curve.b * lx;
+    i ? g.lineTo(X(lx), Y(ly)) : g.moveTo(X(lx), Y(ly));
+  }
+  g.stroke();
+  g.restore();
+}
+
+/* ---------- histogram ---------- */
+let bars = [];
+function drawHist() {
+  const cv = document.getElementById('hist');
+  const { g, w, h } = setup(cv);
+  const B = DATA.hist;                          // [{x0,x1,n}]
+  const maxN = Math.max(...B.map(b => b.n));
+  // the x range always spans both thresholds: that nothing reaches +1.96 is the
+  // point of this chart, and a threshold outside the range would not be drawn
+  const lo = Math.min(B[0].x0, -2.25), hi = Math.max(B[B.length - 1].x1, 2.25);
+  const X = v => PAD.l + (v - lo) / (hi - lo) * (w - PAD.l - PAD.r);
+  const Y = v => h - PAD.b - v / maxN * (h - PAD.t - PAD.b);
+
+  g.strokeStyle = css('--grid'); g.lineWidth = 1; axisText(g);
+  const step = maxN > 120 ? 50 : 20;
+  for (let v = 0; v <= maxN; v += step) {
+    const py = Math.round(Y(v)) + .5;
+    g.beginPath(); g.moveTo(PAD.l, py); g.lineTo(w - PAD.r, py); g.stroke();
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    g.fillText(v, PAD.l - 9, py);
+  }
+
+  bars = [];
+  const hue = css('--series-1'), cloud = css('--cloud');
+  B.forEach(b => {
+    if (!b.n) return;
+    const x = X(b.x0), bw = Math.max(1, X(b.x1) - X(b.x0) - 2);   // 2px surface gap
+    // a bin holding one genus must still be visible, not a sub-pixel sliver
+    const y = Math.min(Y(b.n), h - PAD.b - 2), bh = h - PAD.b - y;
+    g.fillStyle = b.x1 <= -1.96 ? hue : cloud;
+    const r = Math.min(4, bw / 2, bh);                            // 4px rounded top
+    g.beginPath();
+    g.moveTo(x, h - PAD.b); g.lineTo(x, y + r);
+    g.quadraticCurveTo(x, y, x + r, y);
+    g.lineTo(x + bw - r, y); g.quadraticCurveTo(x + bw, y, x + bw, y + r);
+    g.lineTo(x + bw, h - PAD.b); g.closePath(); g.fill();
+    bars.push({ x, w: bw, y, b });
+  });
+
+  // thresholds; the label flips inward near an edge rather than overflowing
+  [-1.96, 1.96].forEach(t => {
+    const px = Math.round(X(t)) + .5;
+    g.strokeStyle = css('--text-secondary'); g.lineWidth = 1;
+    g.beginPath(); g.moveTo(px, PAD.t); g.lineTo(px, h - PAD.b); g.stroke();
+    g.fillStyle = css('--text-secondary');
+    g.font = '11px system-ui, -apple-system, sans-serif';
+    const txt = (t < 0 ? '−' : '+') + '1.96';
+    const tw = g.measureText(txt).width;
+    let right = t < 0;                       // default: label on the outer side
+    if (right && px - 5 - tw < PAD.l) right = false;
+    if (!right && px + 5 + tw > w - PAD.r) right = true;
+    g.textAlign = right ? 'right' : 'left'; g.textBaseline = 'top';
+    g.fillText(txt, px + (right ? -5 : 5), PAD.t + 1);
+  });
+
+  g.strokeStyle = css('--axis'); g.lineWidth = 1;
+  g.beginPath(); g.moveTo(PAD.l, h - PAD.b + .5); g.lineTo(w - PAD.r, h - PAD.b + .5);
+  g.stroke();
+  axisText(g); g.textAlign = 'center'; g.textBaseline = 'top';
+  for (let v = Math.ceil(lo); v <= Math.floor(hi); v++) {
+    g.fillText(v < 0 ? '−' + Math.abs(v) : v, X(v), h - PAD.b + 8);
+  }
+  g.fillStyle = css('--text-secondary');
+  g.font = '12px system-ui, -apple-system, sans-serif';
+  g.fillText('standardised deviation from the curve (z)',
+             (PAD.l + w - PAD.r) / 2, h - 18);
+}
+
+/* ---------- hover ---------- */
+function hookTip(canvasId, tipId, hit) {
+  const cv = document.getElementById(canvasId), tip = document.getElementById(tipId);
+  function move(ev) {
+    const r = cv.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const html = hit(mx, my);
+    if (!html) { tip.style.opacity = 0; return; }
+    tip.innerHTML = html; tip.style.opacity = 1;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    tip.style.left = Math.max(4, Math.min(mx + 14, cv.clientWidth - tw - 4)) + 'px';
+    tip.style.top = Math.max(4, my - th - 10) + 'px';
+  }
+  cv.addEventListener('mousemove', move);
+  cv.addEventListener('mouseleave', () => tip.style.opacity = 0);
+  cv.addEventListener('touchstart', e => {
+    if (e.touches.length === 1) move(e.touches[0]);
+  }, { passive: true });
+}
+
+hookTip('scatter', 'tip1', (mx, my) => {
+  let best = null, bd = 196;                     // 14px hit radius, > the mark
+  for (const p of pts) {
+    const dd = (p.px - mx) ** 2 + (p.py - my) ** 2;
+    if (dd < bd) { bd = dd; best = p; }
+  }
+  if (!best) return null;
+  const d = best.d;
+  return `<b class="sci">${d[0]}</b><br><span class="m">${d[4] || '—'}`
+       + ` &middot; ${d[5] || '—'}</span><br>${fmt(d[1])} compounds`
+       + ` &middot; ${fmt(d[2])} families<br><span class="m">z = </span>`
+       + (d[3] < 0 ? '−' + Math.abs(d[3]).toFixed(2) : d[3].toFixed(2))
+       + (best.sat ? ' <span class="m">· saturated</span>' : '');
+});
+
+hookTip('hist', 'tip2', (mx, my) => {
+  for (const b of bars) {
+    if (mx >= b.x - 1 && mx <= b.x + b.w + 1 && my >= b.y - 6) {
+      const f = v => (v < 0 ? '−' + Math.abs(v).toFixed(2) : v.toFixed(2));
+      return `<b>${b.b.n}</b> genera<br><span class="m">z ${f(b.b.x0)} to ${f(b.b.x1)}</span>`;
+    }
+  }
+  return null;
+});
+
+/* ---------- tables ---------- */
+function table(elId, spec, rows) {
+  const el = document.getElementById(elId);
+  let sortCol = Math.max(0, spec.findIndex(c => c.sort));
+  let asc = !!spec[sortCol].asc;      // a z column wants most-negative first
+  function render() {
+    const body = rows.slice().sort((a, b) => {
+      const x = a[sortCol], y = b[sortCol];
+      const c = (typeof x === 'number' && typeof y === 'number')
+        ? x - y : String(x).localeCompare(String(y));
+      return asc ? c : -c;
+    });
+    el.innerHTML =
+      '<thead><tr>' + spec.map((c, i) =>
+        `<th class="${i === sortCol ? 'sorted ' + (asc ? 'asc' : '') : ''}"
+             data-i="${i}">${c.label}</th>`).join('') + '</tr></thead><tbody>' +
+      body.map(r => '<tr>' + spec.map((c, i) => {
+        const v = r[i];
+        // c.dp forces a fixed decimal count so a column does not mix 7 and 16.80
+        const t = typeof v === 'number'
+          ? (c.dp != null
+             ? (v < 0 ? '−' + Math.abs(v).toFixed(c.dp) : v.toFixed(c.dp))
+             : (Number.isInteger(v) ? fmt(v)
+                : (v < 0 ? '−' + Math.abs(v).toFixed(2) : v.toFixed(2))))
+          : (v == null ? '—' : v);
+        return `<td class="${typeof v === 'number' ? 'num' : ''} ${c.sci ? 'sci' : ''}">${t}</td>`;
+      }).join('') + '</tr>').join('') + '</tbody>';
+    el.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+      const i = +th.dataset.i;
+      if (i === sortCol) asc = !asc; else { sortCol = i; asc = false; }
+      render();
+    }));
+  }
+  render();
+}
+
+table('tSat', DATA.satSpec, DATA.saturated);
+table('tFront', DATA.frontSpec, DATA.frontier);
+table('tProv', DATA.provSpec, DATA.provenance);
+
+document.getElementById('foot').innerHTML = DATA.footer;
+
+
+/* ---------- tabs ---------- */
+const tabs = [...document.querySelectorAll('.tabs button')];
+tabs.forEach(t => t.addEventListener('click', () => {
+  tabs.forEach(o => {
+    const on = o === t;
+    o.setAttribute('aria-selected', on);
+    document.getElementById(o.getAttribute('aria-controls')).hidden = !on;
+  });
+  if (t.id === 'tab-network') drawNet(); else drawAll();
+}));
+
+/* ---------- network ----------
+   Bipartite: genus nodes and structural-family nodes, one order at a time.
+   Layout is a small force simulation - repulsion between every pair, springs
+   along edges, a weak pull to centre. At a few hundred nodes the O(n^2) pass is
+   cheap enough that no quadtree is warranted. */
+const N = DATA.net;
+let netNodes = [], netLinks = [], netReady = false, netTrunc = {g:0,f:0};
+
+(function fillOrders() {
+  const sel = document.getElementById('netOrder');
+  sel.innerHTML = N.orders
+    .map((o, i) => [o, i, N.genera.filter(g => g[3] === i).length])
+    .filter(r => r[2] >= 2)
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(r => `<option value="${r[1]}">${r[0]} (${r[2]} genera)</option>`).join('');
+  const pref = N.orders.indexOf(N.defaultOrder);
+  if (pref >= 0) sel.value = pref;
+  sel.addEventListener('change', () => { netReady = false; drawNet(); });
+})();
+const minSlider = document.getElementById('netMin');
+minSlider.addEventListener('input', () => {
+  document.getElementById('netMinV').textContent = minSlider.value;
+  netReady = false; drawNet();
+});
+
+function buildNet() {
+  const oi = +document.getElementById('netOrder').value;
+  const minSize = +minSlider.value;
+
+  // Collect this order's edges first, then keep only the busiest genera and the
+  // families they most share. Without a cap a dense order puts ~1000 nodes on
+  // screen, which is a hairball and slow to settle; the counts below are
+  // reported so the truncation is visible rather than silent.
+  const MAXG = 45, MAXF = 110;
+  const raw = [];
+  const gDeg = new Map(), fDeg = new Map();
+  for (let k = 0; k < N.edges.length; k += 2) {
+    const g = N.edges[k], f = N.edges[k + 1];
+    if (N.genera[g][3] !== oi) continue;
+    if (N.families[f][0] < minSize) continue;
+    raw.push([g, f]);
+    gDeg.set(g, (gDeg.get(g) || 0) + 1);
+    fDeg.set(f, (fDeg.get(f) || 0) + 1);
+  }
+  const topG = new Set([...gDeg.keys()]
+    .sort((a, b) => N.genera[b][1] - N.genera[a][1]).slice(0, MAXG));
+  const topF = new Set([...fDeg.keys()]
+    .sort((a, b) => (fDeg.get(b) - fDeg.get(a)) || (N.families[b][0] - N.families[a][0]))
+    .slice(0, MAXF));
+  netTrunc = { g: gDeg.size - topG.size, f: fDeg.size - topF.size };
+
+  const gIdx = new Map(), fIdx = new Map();
+  netNodes = []; netLinks = [];
+  for (const [g, f] of raw) {
+    if (!topG.has(g) || !topF.has(f)) continue;
+    if (!gIdx.has(g)) {
+      gIdx.set(g, netNodes.length);
+      const d = N.genera[g];
+      netNodes.push({ t: 0, label: d[0], v: d[1], z: d[2], sat: d[2] < -1.96, deg: 0 });
+    }
+    if (!fIdx.has(f)) {
+      fIdx.set(f, netNodes.length);
+      const d = N.families[f];
+      netNodes.push({ t: 1, label: 'family ' + f, v: d[0], span: d[1], deg: 0 });
+    }
+    const a = gIdx.get(g), b = fIdx.get(f);
+    netNodes[a].deg++; netNodes[b].deg++;
+    netLinks.push([a, b]);
+  }
+
+  const n = netNodes.length;
+  if (!n) { netReady = true; return; }
+  const maxV = Math.max(1, ...netNodes.map(d => d.v));
+  netNodes.forEach((d, i) => {
+    d.r = 3.5 + 10 * Math.sqrt(d.v / maxV);
+    const a = i / n * Math.PI * 2;
+    d.x = Math.cos(a) * 150 + (i % 7) * 2;
+    d.y = Math.sin(a) * 150 + (i % 5) * 2;
+    d.vx = d.vy = 0;
+  });
+
+  // Settle deterministically. Centring is strong enough that a weakly attached
+  // node cannot drift off and stretch the bounding box around everything else.
+  // Centring is weaker on x than on y, so the cluster settles into an ellipse
+  // roughly matching the canvas instead of a circle that fills the height and
+  // wastes the width. This shapes the layout, not the rendering: distances stay
+  // Euclidean, so nothing is visually distorted after the fact.
+  const REP = 2000, SPR = 0.03, LEN = 42, CENX = 0.016, CENY = 0.042, MAXD = 520;
+  for (let it = 0; it < 260; it++) {
+    const cool = 1 - it / 280;
+    for (let i = 0; i < n; i++) {
+      const a = netNodes[i];
+      for (let j = i + 1; j < n; j++) {
+        const b = netNodes[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d2 = dx * dx + dy * dy;
+        if (d2 < 1e-4) { dx = (i % 3) - 1 || 0.7; dy = (j % 3) - 1 || 0.7; d2 = 2; }
+        const d = Math.sqrt(d2), f = REP / d2;
+        const fx = dx / d * f, fy = dy / d * f;
+        a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
+      }
+    }
+    for (const [i, j] of netLinks) {
+      const a = netNodes[i], b = netNodes[j];
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+      const f = (d - LEN) * SPR, fx = dx / d * f, fy = dy / d * f;
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
+    }
+    for (const d of netNodes) {
+      d.vx -= d.x * CENX; d.vy -= d.y * CENY;
+      d.x += d.vx * cool; d.y += d.vy * cool;
+      d.vx *= 0.8; d.vy *= 0.8;
+      const rad = Math.hypot(d.x, d.y);            // hard radius clamp
+      if (rad > MAXD) { d.x *= MAXD / rad; d.y *= MAXD / rad; d.vx = d.vy = 0; }
+    }
+  }
+  netReady = true;
+}
+
+let netPts = [];
+function drawNet() {
+  const cv = document.getElementById('net');
+  if (!cv.clientWidth) return;
+  if (!netReady) buildNet();
+  const { g, w, h } = setup(cv);
+  netPts = [];
+  if (!netNodes.length) {
+    g.fillStyle = css('--text-secondary');
+    g.font = '14px system-ui, sans-serif'; g.textAlign = 'center';
+    g.fillText('no families meet this threshold in this order', w / 2, h / 2);
+    document.getElementById('netStat').textContent = '';
+    return;
+  }
+
+  // fit the simulated coordinates into the canvas
+  const pad = 26;
+  const xs = netNodes.map(d => d.x), ys = netNodes.map(d => d.y);
+  const rmax = Math.max(...netNodes.map(d => d.r));
+  const sx = (w - 2 * pad - 2 * rmax) / Math.max(1, Math.max(...xs) - Math.min(...xs));
+  const sy = (h - 2 * pad - 2 * rmax) / Math.max(1, Math.max(...ys) - Math.min(...ys));
+  const s = Math.min(sx, sy);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  const PX = v => w / 2 + (v - cx) * s, PY = v => h / 2 + (v - cy) * s;
+
+  g.strokeStyle = css('--grid'); g.lineWidth = 1;
+  g.globalAlpha = netLinks.length > 600 ? 0.5 : 0.85;
+  g.beginPath();
+  for (const [i, j] of netLinks) {
+    g.moveTo(PX(netNodes[i].x), PY(netNodes[i].y));
+    g.lineTo(PX(netNodes[j].x), PY(netNodes[j].y));
+  }
+  g.stroke(); g.globalAlpha = 1;
+
+  const cg = css('--series-1'), cf = css('--series-2'), surf = css('--surface');
+  // families first so genus nodes read on top
+  for (const pass of [1, 0]) {
+    for (const d of netNodes) {
+      if (d.t !== pass) continue;
+      const px = PX(d.x), py = PY(d.y);
+      if (pass === 1) netPts.push({ px, py, d });
+      g.fillStyle = d.t ? cf : cg;
+      g.beginPath(); g.arc(px, py, d.r, 0, 7); g.fill();
+      g.strokeStyle = surf; g.lineWidth = 2; g.stroke();   // 2px surface ring
+      if (d.sat) {                                          // saturated: outer ring
+        g.strokeStyle = css('--text-primary'); g.lineWidth = 1.5;
+        g.beginPath(); g.arc(px, py, d.r + 3, 0, 7); g.stroke();
+      }
+      if (pass === 0) netPts.push({ px, py, d });
+    }
+  }
+
+  // Direct labels on the largest genera, so identity never rests on colour
+  // alone. A label is skipped when its box would overlap one already placed:
+  // overlapping labels are unreadable and imply a precision the layout lacks.
+  const named = netNodes.filter(d => d.t === 0).sort((a, b) => b.v - a.v);
+  g.font = '11.5px system-ui, -apple-system, sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'bottom';
+  const placed = [];
+  for (const d of named) {
+    if (placed.length >= 8) break;
+    const px = PX(d.x), py = PY(d.y) - d.r - 5;
+    const tw = g.measureText(d.label).width;
+    const box = { x0: px - tw / 2 - 3, x1: px + tw / 2 + 3, y0: py - 13, y1: py + 2 };
+    if (box.x0 < 2 || box.x1 > w - 2 || box.y0 < 2) continue;
+    if (placed.some(b => !(box.x1 < b.x0 || box.x0 > b.x1
+                           || box.y1 < b.y0 || box.y0 > b.y1))) continue;
+    placed.push(box);
+    g.fillStyle = surf; g.globalAlpha = 0.8;
+    g.fillRect(box.x0, box.y0, box.x1 - box.x0, box.y1 - box.y0);
+    g.globalAlpha = 1; g.fillStyle = css('--text-primary');
+    g.fillText(d.label, px, py);
+  }
+
+  const ng = netNodes.filter(d => !d.t).length, nf = netNodes.length - ng;
+  const poss = ng * nf;
+  const trunc = (netTrunc.g || netTrunc.f)
+    ? ` · showing the busiest nodes; ${netTrunc.g} further genera and `
+      + `${netTrunc.f} further families in this order are not drawn`
+    : '';
+  document.getElementById('netStat').textContent =
+    `${ng} genera, ${nf} families, ${netLinks.length} links `
+    + `— ${(netLinks.length / poss * 100).toFixed(1)}% of the `
+    + `${poss.toLocaleString('en-US')} possible pairs shown` + trunc;
+}
+
+hookTip('net', 'tip3', (mx, my) => {
+  let best = null, bd = 1e9;
+  for (const p of netPts) {
+    const dd = (p.px - mx) ** 2 + (p.py - my) ** 2;
+    const rr = (p.d.r + 6) ** 2;
+    if (dd < rr && dd < bd) { bd = dd; best = p; }
+  }
+  if (!best) return null;
+  const d = best.d;
+  if (d.t === 0) {
+    return `<b class="sci">${d.label}</b><br>${fmt(d.v)} compounds `
+         + `&middot; ${d.deg} families here<br><span class="m">z = </span>`
+         + (d.z < 0 ? '−' + Math.abs(d.z).toFixed(2) : d.z.toFixed(2))
+         + (d.sat ? ' <span class="m">· saturated</span>' : '');
+  }
+  return `<b>${d.label}</b><br>${fmt(d.v)} compounds overall<br>`
+       + `<span class="m">in ${d.deg} genera here, ${d.span} across all genera</span>`;
+});
+
+/* ---------- draw ---------- */
+function drawAll() { drawScatter(); drawHist(); }
+drawAll();
+let rt; addEventListener('resize', () => {
+  clearTimeout(rt);
+  rt = setTimeout(() => {
+    drawAll();
+    if (!document.getElementById('p-network').hidden) drawNet();
+  }, 140);
+});
+</script>
+</body>
+</html>

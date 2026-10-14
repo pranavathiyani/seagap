@@ -6,3 +6,7 @@ data/interim/*
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+
+# generated viewer is tracked on purpose: GitHub Pages serves it from /docs
+!docs/
+!docs/index.html
