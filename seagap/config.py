@@ -14,6 +14,18 @@ ROOT = Path(__file__).resolve().parents[1]
 RELEASE = ROOT / "marinenp_v1_r20250608_csv"
 INTERIM = ROOT / "data" / "interim"
 
+# The comparison baseline for step 14. MarineNP derives from COCONUT, so the
+# non-marine COCONUT remainder is a provenance-matched control: same parent
+# collection, same curation, same classifier. Unzip coconut_csv-*.zip here.
+# Not tracked; CC0.
+COCONUT = ROOT / "data" / "coconut"
+
+# How many baseline compounds to profile. The full collection is far larger
+# than needed: at this size every effect worth reporting is resolved well
+# inside the sampling error, and the descriptor pass stays a few minutes.
+BASELINE_SAMPLE = 50_000
+BASELINE_SEED = 0
+
 TABLES = {
     "molecules": "molecules.csv",
     "properties": "properties.csv",

@@ -142,6 +142,31 @@ code { font-size: 12.5px; background: color-mix(in srgb, var(--muted) 13%, trans
   h1 { font-size: 22px; }
   .tile .v { font-size: 21px; }
 }
+
+/* ---- compound browser ---- */
+.cmpbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+          margin: 0 0 12px; font-size: 13.5px; color: var(--text-secondary); }
+.cmpbar input, .cmpbar select { font: inherit; font-size: 13.5px;
+  background: var(--surface); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 7px; padding: 5px 9px; }
+.cmpbar input[type=number] { width: 84px; }
+.cmpbar input[type=text] { min-width: 190px; }
+.cmpbar label { display: flex; gap: 6px; align-items: center; }
+.cmpbar button { font: inherit; font-size: 13px; background: var(--surface);
+  color: var(--text-primary); border: 1px solid var(--border);
+  border-radius: 7px; padding: 5px 11px; cursor: pointer; }
+.cmpbar button:hover { border-color: var(--axis); }
+#cmpBody td { height: 28px; padding: 4px 10px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; max-width: 230px; }
+#cmpBody tr { cursor: pointer; }
+#cmpBody tr.sel { background: color-mix(in srgb, var(--series-1) 15%, transparent); }
+#cmpCount { color: var(--text-secondary); font-size: 13px; margin: 0 0 10px; }
+#cmpDetail { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface); font-size: 13px;
+  line-height: 1.55; }
+#cmpDetail .smi { font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px; word-break: break-all; color: var(--text-secondary); }
+#cmpDetail .k { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -159,6 +184,7 @@ source taxonomy.</p>
 
 <nav class="tabs" role="tablist">
   <button role="tab" id="tab-overview" aria-controls="p-overview" aria-selected="true">Overview</button>
+  <button role="tab" id="tab-compounds" aria-controls="p-compounds" aria-selected="false">Compounds</button>
   <button role="tab" id="tab-network"  aria-controls="p-network"  aria-selected="false">Network</button>
   <button role="tab" id="tab-tables"   aria-controls="p-tables"   aria-selected="false">Tables</button>
 </nav>
@@ -244,9 +270,31 @@ inherited from it &mdash; phylum, habitat flags &mdash; is wrong.</p>
 
 </section>
 
+
+<section class="panel" id="p-compounds" role="tabpanel" aria-labelledby="tab-compounds" hidden>
+
+<h2>Every compound, with its computed panel</h2>
+<p class="note">All descriptors are computed from the structure by a documented
+function. Nothing here is a model prediction. Search matches compound name,
+genus and SMILES. The numeric filter applies to one column at a time; pick the
+column, then set a bound.</p>
+
+<div class="cmpbar" id="cmpBar"></div>
+<p id="cmpCount"></p>
+<div class="scroll" id="cmpScroll" style="max-height: 520px">
+  <table id="cmpTable">
+    <thead><tr id="cmpHead"></tr></thead>
+    <tbody id="cmpBody"></tbody>
+  </table>
+</div>
+<div id="cmpDetail">Select a row to see its name, family and SMILES.</div>
+
+</section>
+
 <footer id="foot"></footer>
 </div>
 
+<script src="compounds.js"></script>
 <script id="seagap-data" type="application/json">__DATA__</script>
 <script>
 const DATA = JSON.parse(document.getElementById('seagap-data').textContent);
@@ -537,7 +585,9 @@ tabs.forEach(t => t.addEventListener('click', () => {
     o.setAttribute('aria-selected', on);
     document.getElementById(o.getAttribute('aria-controls')).hidden = !on;
   });
-  if (t.id === 'tab-network') drawNet(); else drawAll();
+  if (t.id === 'tab-network') drawNet();
+  else if (t.id === 'tab-compounds') { if (window.cmpDraw) window.cmpDraw(); }
+  else drawAll();
 }));
 
 /* ---------- network ----------
@@ -775,6 +825,259 @@ let rt; addEventListener('resize', () => {
     if (!document.getElementById('p-network').hidden) drawNet();
   }, 140);
 });
+
+</script>
+
+<script>
+/* ---------- compound browser ----------
+   29,154 rows. Only the visible window is in the DOM; the rest is two spacer
+   rows whose heights stand in for the scrolled-past and not-yet-reached parts.
+   That keeps the sticky header working, which an absolutely-positioned
+   virtual list would not. */
+window.cmpDraw = function () {};
+(function () {
+  const C = window.COMPOUNDS;
+  const panel = document.getElementById('p-compounds');
+  if (!C) {
+    panel.innerHTML = '<h2>Compounds</h2><p class="note">compounds.js was not ' +
+      'found beside this page. Run <code>python scripts/16_browser.py</code> ' +
+      'to write it, then reload.</p>';
+    return;
+  }
+
+  const H = C.head, FIXED = 4, MISS = -2147483648, ROWH = 28, OVER = 6;
+  const catNames = H.slice(FIXED, FIXED + C.nCat);
+  const numNames = H.slice(FIXED + C.nCat);
+  const numStart = FIXED + C.nCat;
+  const idx = n => H.indexOf(n);
+  const dec = s => Math.max(0, Math.round(Math.log10(s)));
+  // U+2212, matching the charts and tables above rather than hyphen-minus.
+  const sign = (v, d) => (v < 0 ? '\u2212' + Math.abs(v).toFixed(d)
+                                : v.toFixed(d));
+
+  /* Columns shown in the grid. The rest stay in the payload and surface in the
+     detail box, because twenty-three columns is a spreadsheet, not a table. */
+  const SHOW = ['Phylum', 'Genus', 'Pathway', 'MW', 'cLogP', 'Fsp3', 'Stereo',
+                'NPL', 'SA', 'QED', 'Ro5'].filter(n => idx(n) >= 0);
+
+  const state = { q: '', cat: {}, numCol: 'MW', lo: null, hi: null,
+                  hideSus: false, macroOnly: false, sort: null, asc: false };
+  let view = [];
+
+  /* ---- controls ---- */
+  const bar = document.getElementById('cmpBar');
+  const mk = (html) => { const d = document.createElement('span');
+                         d.innerHTML = html; return d.firstElementChild; };
+
+  const q = mk('<input type="text" placeholder="name, genus or SMILES">');
+  bar.appendChild(q);
+
+  // Genus has over a thousand entries, so it is reached through the search box
+  // rather than a select nobody could scroll.
+  ['Phylum', 'Pathway', 'Superclass'].forEach(name => {
+    if (!C.dicts[name]) return;
+    const s = mk('<select></select>');
+    s.innerHTML = '<option value="-1">' + name + ': all</option>' +
+      C.dicts[name].map((v, i) => '<option value="' + i + '">' + v +
+                        '</option>').join('');
+    s.addEventListener('change', () => {
+      state.cat[name] = +s.value; apply();
+    });
+    bar.appendChild(s);
+  });
+
+  const nsel = mk('<select></select>');
+  nsel.innerHTML = numNames.map(n => '<option>' + n + '</option>').join('');
+  nsel.value = state.numCol;
+  const lo = mk('<input type="number" placeholder="min">');
+  const hi = mk('<input type="number" placeholder="max">');
+  bar.append(nsel, lo, hi);
+
+  const susBox = mk('<label><input type="checkbox">hide suspect ids</label>');
+  const macBox = mk('<label><input type="checkbox">macrocyclic only</label>');
+  const reset = mk('<button type="button">Reset</button>');
+  bar.append(susBox, macBox, reset);
+
+  const deb = (fn, ms) => { let t; return () => { clearTimeout(t);
+                            t = setTimeout(fn, ms); }; };
+  q.addEventListener('input', deb(() => { state.q = q.value.trim().toLowerCase();
+                                          apply(); }, 160));
+  nsel.addEventListener('change', () => { state.numCol = nsel.value; apply(); });
+  lo.addEventListener('input', deb(() => {
+    state.lo = lo.value === '' ? null : +lo.value; apply(); }, 160));
+  hi.addEventListener('input', deb(() => {
+    state.hi = hi.value === '' ? null : +hi.value; apply(); }, 160));
+  susBox.querySelector('input').addEventListener('change', e => {
+    state.hideSus = e.target.checked; apply(); });
+  macBox.querySelector('input').addEventListener('change', e => {
+    state.macroOnly = e.target.checked; apply(); });
+  reset.addEventListener('click', () => {
+    q.value = ''; lo.value = ''; hi.value = '';
+    bar.querySelectorAll('select').forEach(s => { if (s !== nsel) s.value = '-1'; });
+    bar.querySelectorAll('input[type=checkbox]').forEach(c => c.checked = false);
+    Object.assign(state, { q: '', cat: {}, lo: null, hi: null,
+                           hideSus: false, macroOnly: false });
+    apply();
+  });
+
+  /* ---- header ---- */
+  const head = document.getElementById('cmpHead');
+  head.innerHTML = SHOW.map(n => {
+    const num = idx(n) >= numStart;
+    return '<th data-c="' + n + '"' + (num ? ' class="num"' : '') + '>' + n +
+           '</th>';
+  }).join('');
+  head.querySelectorAll('th').forEach(th => th.addEventListener('click', () => {
+    const c = th.dataset.c;
+    state.asc = state.sort === c ? !state.asc : false;
+    state.sort = c;
+    head.querySelectorAll('th').forEach(o => o.classList.remove('sorted', 'asc'));
+    th.classList.add('sorted'); if (state.asc) th.classList.add('asc');
+    sortView(); render();
+  }));
+
+  /* ---- filter ---- */
+  function apply() {
+    const ni = idx(state.numCol);
+    const sc = ni >= numStart ? C.scales[ni - numStart] : 1;
+    const loR = state.lo === null ? null : state.lo * sc;
+    const hiR = state.hi === null ? null : state.hi * sc;
+    const cats = Object.entries(state.cat)
+      .filter(([, v]) => v >= 0).map(([k, v]) => [idx(k), v]);
+    const qq = state.q;
+
+    view = [];
+    for (let i = 0; i < C.n; i++) {
+      const r = C.rows[i];
+      if (state.hideSus && r[3]) continue;
+      if (state.macroOnly && !r[2]) continue;
+      let ok = true;
+      for (let k = 0; k < cats.length; k++)
+        if (r[cats[k][0]] !== cats[k][1]) { ok = false; break; }
+      if (!ok) continue;
+      if (loR !== null || hiR !== null) {
+        const v = r[ni];
+        if (v === MISS) continue;
+        if (loR !== null && v < loR) continue;
+        if (hiR !== null && v > hiR) continue;
+      }
+      if (qq) {
+        const gi = r[idx('Genus')];
+        const g = gi >= 0 && C.dicts.Genus ? C.dicts.Genus[gi] : '';
+        if (!(C.names[i].toLowerCase().includes(qq)
+              || g.toLowerCase().includes(qq)
+              || C.smiles[i].toLowerCase().includes(qq))) continue;
+      }
+      view.push(i);
+    }
+    sortView();
+    render();
+  }
+
+  function sortView() {
+    if (!state.sort) return;
+    const c = idx(state.sort), s = state.asc ? 1 : -1;
+    const isNum = c >= numStart;
+    view.sort((a, b) => {
+      let x = C.rows[a][c], y = C.rows[b][c];
+      if (isNum) { if (x === MISS) return 1; if (y === MISS) return -1; }
+      else {
+        const d = C.dicts[state.sort];
+        x = x >= 0 && d ? d[x] : ''; y = y >= 0 && d ? d[y] : '';
+        return s * String(x).localeCompare(String(y));
+      }
+      return s * (x - y);
+    });
+  }
+
+  /* ---- render ---- */
+  const scroll = document.getElementById('cmpScroll');
+  const body = document.getElementById('cmpBody');
+  const count = document.getElementById('cmpCount');
+  let sel = -1;
+
+  function cell(i, name) {
+    const c = idx(name), v = C.rows[i][c];
+    if (c >= numStart) {
+      if (v === MISS) return '<td class="num">&mdash;</td>';
+      const s = C.scales[c - numStart];
+      return '<td class="num">' + sign(v / s, dec(s)) + '</td>';
+    }
+    const d = C.dicts[name];
+    const t = v >= 0 && d ? d[v] : '&mdash;';
+    const it = (name === 'Genus') ? ' class="sci"' : '';
+    return '<td' + it + '>' + t + '</td>';
+  }
+
+  function render() {
+    const total = view.length;
+    count.textContent = total.toLocaleString() + ' of ' +
+      C.n.toLocaleString() + ' compounds';
+    const h = scroll.clientHeight || 520;
+    const first = Math.max(0, Math.floor(scroll.scrollTop / ROWH) - OVER);
+    const last = Math.min(total, first + Math.ceil(h / ROWH) + OVER * 2);
+    let out = '';
+    if (first > 0) out += '<tr style="height:' + first * ROWH + 'px"></tr>';
+    for (let k = first; k < last; k++) {
+      const i = view[k];
+      out += '<tr data-i="' + i + '"' + (i === sel ? ' class="sel"' : '') + '>' +
+             SHOW.map(n => cell(i, n)).join('') + '</tr>';
+    }
+    if (last < total)
+      out += '<tr style="height:' + (total - last) * ROWH + 'px"></tr>';
+    body.innerHTML = out;
+  }
+
+  scroll.addEventListener('scroll', () => render());
+  body.addEventListener('click', e => {
+    const tr = e.target.closest('tr[data-i]');
+    if (!tr) return;
+    sel = +tr.dataset.i;
+    detail(sel);
+    render();
+  });
+
+  const det = document.getElementById('cmpDetail');
+  function detail(i) {
+    const r = C.rows[i];
+    const cat = catNames.map(n => {
+      const v = r[idx(n)], d = C.dicts[n];
+      return v >= 0 && d ? '<span class="k">' + n + '</span> ' + d[v] : null;
+    }).filter(Boolean).join(' &middot; ');
+    const nums = numNames.map(n => {
+      const v = r[idx(n)];
+      if (v === MISS) return null;
+      const s = C.scales[idx(n) - numStart];
+      return '<span class="k">' + n + '</span> ' + sign(v / s, dec(s));
+    }).filter(Boolean).join(' &middot; ');
+    det.innerHTML =
+      '<div><b>' + (C.names[i] || 'unnamed') + '</b>' +
+      (r[3] ? ' <span class="k">(suspect organism identifier)</span>' : '') +
+      '</div>' +
+      '<div><span class="k">MarineNP id</span> ' + r[0] +
+      ' &middot; <span class="k">family</span> ' +
+      (r[1] >= 0 ? r[1] : '&mdash;') +
+      ' &middot; <span class="k">macrocyclic</span> ' + (r[2] ? 'yes' : 'no') +
+      '</div>' +
+      '<div>' + cat + '</div>' +
+      '<div>' + nums + '</div>' +
+      '<div class="smi">' + (C.smiles[i] || '') + '</div>';
+  }
+
+  let built = false;
+  window.cmpDraw = function () {
+    if (!built) { built = true; apply(); }
+    else render();
+  };
+
+  // The browser listens for its own tab rather than relying on the shared
+  // handler in the main script. If anything in the chart or network code
+  // throws, that handler never attaches, and the browser would silently
+  // render a header with no rows under it.
+  const btn = document.getElementById('tab-compounds');
+  if (btn) btn.addEventListener('click', () => window.cmpDraw());
+})();
+
 </script>
 </body>
 </html>

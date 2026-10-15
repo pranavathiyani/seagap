@@ -3,6 +3,10 @@ marinenp_v1_r20250608_csv/
 data/interim/*
 !data/interim/.gitkeep
 
+# The COCONUT baseline CSV is ~700 MB unzipped. It is a CC0 public download,
+# reproducible from the link in the README, and has no business in a git repo.
+data/coconut/
+
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
@@ -10,3 +14,4 @@ __pycache__/
 # generated viewer is tracked on purpose: GitHub Pages serves it from /docs
 !docs/
 !docs/index.html
+!docs/compounds.js
